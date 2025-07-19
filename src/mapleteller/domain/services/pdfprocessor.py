@@ -2,6 +2,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from datetime import date
+from typing import Self
 
 import pdfplumber
 import pdfplumber.page
@@ -17,24 +18,18 @@ class PDFProcessor(ABC):
         with pdfplumber.open(file) as pdf:
             with pdfplumber.open(file) as pdf:
                 first_page = pdf.pages[0].extract_text(layout=True, x_tolerance=1)
-                if 'BMO' in first_page:
-                    logger.debug('Looks like a BMO Credit Card statement')
-                    if 'Statement Date' in first_page:
-                        logger.debug('Looks like an old version of a BMO Credit Card statement')
-                        processor = OldBMOMastercardPDFProcessor(logger)
-                    elif 'Statement date' in first_page:
-                        logger.debug('Looks like a new version of a BMO Credit Card statement')
-                        processor = BMOMastercardPDFProcessor(logger)
-                    elif 'Summary of your account' in first_page:
-                        logger.debug('Looks like a BMO Banking Account statement')
-                        processor = BMOChequingPDFProcessor(logger)
-                    else:
-                        print(first_page)
-                        raise ValueError('No idea what this is')
-                elif 'Summary of your account' in first_page:
-                    logger.debug('Looks like a BMO Banking Account statement')
-                    processor = BMOChequingPDFProcessor(logger)
-                else:
+
+                processor = None
+                for processor_cls in [
+                    OldBMOMastercardPDFProcessor,
+                    BMOMastercardPDFProcessor,
+                    BMOChequingPDFProcessor,
+                ]:
+                    processor = processor_cls.try_create_processor(first_page, logger)
+                    if processor is not None:
+                        break
+
+                if processor is None:
                     print(first_page)
                     raise ValueError('No idea what this is')
 
@@ -123,6 +118,18 @@ class BMOChequingPDFProcessor(PDFProcessor):
     BALANCE_SLICE = slice(109, 125)
 
     TX_PATTERN = re.compile(r'\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(.+)')
+
+    @classmethod
+    def try_create_processor(cls, first_page: str, logger: logging.Logger) -> Self | None:
+        if 'BMO' in first_page:
+            logger.debug('Looks like a BMO statement')
+            if 'Summary of your account' in first_page:
+                logger.debug('Looks like a BMO Banking Account statement')
+                return cls(logger)
+        elif 'Summary of your account' in first_page:
+            logger.debug('Looks like a BMO Banking Account statement')
+            return cls(logger)
+        return None
 
     def __init__(self, logger: logging.Logger):
         super().__init__(logger)
@@ -244,6 +251,15 @@ class BMOMastercardPDFProcessor(PDFProcessor):
 
     TX_PATTERN = re.compile(r'\s+([A-Z][a-z]{2})\.\s+(\d{1,2})\s+([A-Z][a-z]{2})\.\s+(\d{1,2})\s+(.+)')
 
+    @classmethod
+    def try_create_processor(cls, first_page: str, logger: logging.Logger) -> Self | None:
+        if 'BMO' in first_page:
+            logger.debug('Looks like a BMO statement')
+            if 'Statement date' in first_page:
+                logger.debug('Looks like a new version of a BMO Credit Card statement')
+                return cls(logger)
+        return None
+
     def __init__(self, logger: logging.Logger):
         super().__init__(logger)
         self.year = None
@@ -353,10 +369,10 @@ class BMOMastercardPDFProcessor(PDFProcessor):
         for t in transactions:
             if t.credit is not None:
                 total_amount += t.credit
-                print(f'{t.payee:55s}  {t.credit:8d}  {" ":8s}  {total_amount:8d}')
+                print(f'{t.payee:60s}  {t.credit:8d}  {" ":8s}  {total_amount:8d}')
             elif t.debit is not None:
                 total_amount -= t.debit
-                print(f'{t.payee:55s}  {" ":8s}  {t.debit:8d}  {total_amount:8d}')
+                print(f'{t.payee:60s}  {" ":8s}  {t.debit:8d}  {total_amount:8d}')
             else:
                 assert False, f'Transaction has no credit or debit {t}'
 
@@ -369,6 +385,15 @@ class OldBMOMastercardPDFProcessor(BMOMastercardPDFProcessor):
     AMOUNT_SLICE = slice(118, 135)
 
     TX_PATTERN = re.compile(r'\s+([A-Z][a-z]{2})\.\s+(\d{1,2})\s+([A-Z][a-z]{2})\.\s+(\d{1,2})\s+(.+)')
+
+    @classmethod
+    def try_create_processor(cls, first_page: str, logger: logging.Logger) -> Self | None:
+        if 'BMO' in first_page:
+            logger.debug('Looks like a BMO statement')
+            if 'Statement Date' in first_page:
+                logger.debug('Looks like an old version of a BMO Credit Card statement')
+                return cls(logger)
+        return None
 
     def process_first_page(self, text: str) -> None:
         for line in text.split('\n'):
