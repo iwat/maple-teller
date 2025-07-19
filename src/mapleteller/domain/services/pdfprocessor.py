@@ -11,46 +11,50 @@ from mapleteller.domain import Transaction
 MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
 class PDFProcessor(ABC):
+    @staticmethod
+    def process(file: str, logger: logging.Logger) -> list[Transaction]:
+        logger.info('Processing file %s', file)
+        with pdfplumber.open(file) as pdf:
+            with pdfplumber.open(file) as pdf:
+                first_page = pdf.pages[0].extract_text(layout=True, x_tolerance=1)
+                if 'BMO' in first_page:
+                    logger.debug('Looks like a BMO Credit Card statement')
+                    if 'Statement Date' in first_page:
+                        logger.debug('Looks like an old version of a BMO Credit Card statement')
+                        processor = OldBMOMastercardPDFProcessor(logger)
+                    elif 'Statement date' in first_page:
+                        logger.debug('Looks like a new version of a BMO Credit Card statement')
+                        processor = BMOMastercardPDFProcessor(logger)
+                    elif 'Summary of your account' in first_page:
+                        logger.debug('Looks like a BMO Banking Account statement')
+                        processor = BMOChequingPDFProcessor(logger)
+                    else:
+                        print(first_page)
+                        raise ValueError('No idea what this is')
+                elif 'Summary of your account' in first_page:
+                    logger.debug('Looks like a BMO Banking Account statement')
+                    processor = BMOChequingPDFProcessor(logger)
+                else:
+                    print(first_page)
+                    raise ValueError('No idea what this is')
+
+                transactions = []
+                with pdfplumber.open(file) as pdf:
+                    for page in pdf.pages:
+                        text = processor.extract_text(page)
+                        if page.page_number == 1:
+                            processor.process_first_page(text)
+                        logger.info('Processing page %d', page.page_number)
+                        transactions.extend(processor.process_page(text))
+
+                return processor.post_process_transactions(transactions)
+
     def __init__(self, logger: logging.Logger):
         self.logger = logger
-        self.year = None
 
-    def process(self, file: str):
-        self.logger.info('Processing file %s', file)
-        transactions = []
-        with pdfplumber.open(file) as pdf:
-            for page in pdf.pages:
-                self.logger.info('Processing page %d', page.page_number)
-                transactions.extend(self._process_page(self.extract_text(page)))
-
-        assert transactions and transactions[0].balance is not None
-        transactions = transactions[1:]
-
-        assert transactions and transactions[-1].balance is None
-
-        total_credit = 0
-        total_debit = 0
-        for t in transactions[:-1]:
-            if t.credit:
-                total_credit += t.credit
-            if t.debit:
-                total_debit += t.debit
-
-        assert total_credit == transactions[-1].credit
-        assert total_debit == transactions[-1].debit
-
-    def _process_page(self, text: str) -> list[Transaction]:
+    def process_page(self, text: str) -> list[Transaction]:
         lines = text.split('\n')
         transactions = []
-
-        if self.year is None:
-            for line in lines:
-                self.year = self.extract_year(line)
-                if self.year is not None:
-                    self.logger.info('Statement year %d', self.year)
-                    break
-
-        assert self.year, 'Statement year not found'
 
         began_transaction = False
         for i in range(len(lines)):
@@ -65,7 +69,13 @@ class PDFProcessor(ABC):
             return []
 
         for i in range(len(lines)):
+            self.logger.debug('[_] %s', lines[i])
+
+            if self.should_stop_processing_doc(lines[i]):
+                self.logger.info('Document processing stopped')
+                break
             if self.should_stop_processing_page(lines[i]):
+                self.logger.info('Page processing stopped')
                 break
 
             if i == 0:
@@ -78,7 +88,6 @@ class PDFProcessor(ABC):
             else:
                 next_line = None
 
-            self.logger.debug('[_] %s', lines[i])
             tx = self.prepare_new_transaction(lines[i], prev_line, next_line)
             if tx:
                 self.logger.info('[T] %s', tx)
@@ -90,7 +99,7 @@ class PDFProcessor(ABC):
     def extract_text(self, page: pdfplumber.page.Page) -> str: ...
 
     @abstractmethod
-    def extract_year(self, line: str) -> int | None: ...
+    def process_first_page(self, text: str) -> None: ...
 
     @abstractmethod
     def should_begin_processing_transaction(self, line: str) -> bool: ...
@@ -101,20 +110,37 @@ class PDFProcessor(ABC):
     @abstractmethod
     def should_stop_processing_page(self, line: str) -> bool: ...
 
+    @abstractmethod
+    def should_stop_processing_doc(self, line: str) -> bool: ...
+
+    @abstractmethod
+    def post_process_transactions(self, transactions: list[Transaction]) -> list[Transaction]: ...
+
 class BMOChequingPDFProcessor(PDFProcessor):
     DESC_SLICE = slice(None, 68)
     CREDIT_SLICE = slice(70, 87)
     DEBIT_SLICE = slice(90, 107)
     BALANCE_SLICE = slice(109, 125)
 
+    TX_PATTERN = re.compile(r'\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(.+)')
+
+    def __init__(self, logger: logging.Logger):
+        super().__init__(logger)
+        self.year = None
+        self.closing_debit = None
+        self.closing_cretit = None
+
     def extract_text(self, page: pdfplumber.page.Page) -> str:
         return page.extract_text(layout=True, x_density=4.5, x_tolerance=1)
 
-    def extract_year(self, line: str) -> int | None:
-        m = re.fullmatch(r'\s+For\s+the\s+period\s+ending\s+[A-Z][a-z]+\s+\d{2},\s+(\d{4}).*', line)
-        if m:
-            return int(m.group(1))
-        return None
+    def process_first_page(self, text: str) -> None:
+        for line in text.split('\n'):
+            m = re.fullmatch(r'\s+For\s+the\s+period\s+ending\s+[A-Z][a-z]+\s+\d{2},\s+(\d{4}).*', line)
+            if m:
+                self.logger.info('Year found: %s', m.group(1))
+                self.year = int(m.group(1))
+                break
+        assert self.year is not None, 'Year not found'
 
     def should_begin_processing_transaction(self, line: str) -> bool:
         return re.fullmatch(r'\s+Date\s+Description\s+.*', line) is not None
@@ -130,21 +156,26 @@ class BMOChequingPDFProcessor(PDFProcessor):
         self.logger.debug('d: [%s]', debit)
         self.logger.debug('b: [%s]', balance)
 
-        tx_matcher = re.fullmatch(r'\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(.+)', desc)
-        self.logger.debug('tx_matcher: %s', tx_matcher)
+        tx_matcher = BMOChequingPDFProcessor.TX_PATTERN.fullmatch(desc)
         if tx_matcher is None:
             return None
 
+        self.logger.debug('tx_matcher: %s', tx_matcher.groups())
+
         note = tx_matcher.group(3).strip()
+
+        if 'Opening balance' in note:
+            return None
+
         if next_line:
             next_desc = next_line[BMOChequingPDFProcessor.DESC_SLICE]
             next_credit = next_line[BMOChequingPDFProcessor.CREDIT_SLICE].strip()
             next_debit = next_line[BMOChequingPDFProcessor.DEBIT_SLICE].strip()
             next_balance = next_line[BMOChequingPDFProcessor.BALANCE_SLICE].strip()
 
-            next_tx_matcher = re.fullmatch(r'\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(.+)', next_desc)
+            next_tx_matcher = BMOChequingPDFProcessor.TX_PATTERN.fullmatch(next_desc)
             if next_tx_matcher is None and next_desc.strip() != '' and next_credit == '' and next_debit == '' and next_balance == '':
-                note += ' ' + next_line[:65].strip()
+                note += ' ' + next_desc.strip()
 
         credit = credit.replace(',', '').replace('.', '').strip()
         debit = debit.replace(',', '').replace('.', '').strip()
@@ -165,6 +196,11 @@ class BMOChequingPDFProcessor(PDFProcessor):
         else:
             balance = None
 
+        if 'Closing totals' in note:
+            self.closing_debit = debit
+            self.closing_credit = credit
+            return None
+
         month = MONTHS.index(tx_matcher.group(1).lower()) + 1
         assert self.year, 'Statement year not set'
         tx_date = date(self.year, month, int(tx_matcher.group(2)))
@@ -179,8 +215,233 @@ class BMOChequingPDFProcessor(PDFProcessor):
         )
 
     def should_stop_processing_page(self, line: str) -> bool:
-        return 'Please report any errors' in line \
-            or line.strip() == 'continued'
+        return line.strip() == 'continued'
+
+    def should_stop_processing_doc(self, line: str) -> bool:
+        return 'Please report any errors' in line
+
+    def post_process_transactions(self, transactions: list[Transaction]) -> list[Transaction]:
+        total_credit = 0
+        total_debit = 0
+        for t in transactions:
+            if t.credit is not None:
+                print(f'{t.payee:55s}  {t.credit:8d}  {" ":8s}  {total_credit:8d}')
+                total_credit += t.credit
+            elif t.debit is not None:
+                print(f'{t.payee:55s}  {" ":8s}  {t.debit:8d}  {total_debit:8d}')
+                total_debit += t.debit
+            else:
+                assert False, f'Transaction has no credit or debit {t}'
+
+        assert total_credit == self.closing_credit, f'Credit mismatch: {total_credit} != {self.closing_credit}'
+        assert total_debit == self.closing_debit, f'Debit mismatch: {total_debit} != {self.closing_debit}'
+
+        return transactions
+
+class BMOMastercardPDFProcessor(PDFProcessor):
+    DESC_SLICE = slice(None, 78)
+    AMOUNT_SLICE = slice(78, 95)
+
+    TX_PATTERN = re.compile(r'\s+([A-Z][a-z]{2})\.\s+(\d{1,2})\s+([A-Z][a-z]{2})\.\s+(\d{1,2})\s+(.+)')
+
+    def __init__(self, logger: logging.Logger):
+        super().__init__(logger)
+        self.year = None
+        self.opening_balance = None
+        self.closing_balance = None
+
+    def extract_text(self, page: pdfplumber.page.Page) -> str:
+        return page.extract_text(layout=True, x_density=4.5, x_tolerance=1)
+
+    def process_first_page(self, text: str) -> None:
+        for line in text.split('\n'):
+            if not self.opening_balance:
+                m = re.fullmatch(r'\s+Previous\s+(?:total\s+)?balance,\s+[A-Z][a-z]{2}\.\s+\d{1,2},\s+\d{4}\s+\$([\d,]+.\d{2}\s+(CR)?).*', line)
+                if m:
+                    self.logger.info('Open balance found: %s', m.group(1))
+                    opening_balance = m.group(1).replace(',', '').replace('.', '')
+                    if m.group(2):
+                        self.opening_balance = -int(opening_balance.replace('CR', ''))
+                    else:
+                        self.opening_balance = int(opening_balance)
+
+            if not self.year:
+                m = re.fullmatch(r'.*\s+Statement\s+date\s+[A-Z][a-z]+\.\s+\d{1,2},\s+(\d{4}).*', line)
+                if m:
+                    self.logger.info('Year found: %s', m.group(1))
+                    self.year = int(m.group(1))
+
+            if not self.closing_balance:
+                m = re.fullmatch(r'\s+Total\s+balance\s+\$([\d,]+.\d{2})\s+(CR)?.*', line)
+                if m:
+                    self.logger.info('Closing balance found: %s', m.group(1))
+                    self.closing_balance = m.group(1).replace(',', '').replace('.', '')
+                    if m.group(2):
+                        self.closing_balance = -int(self.closing_balance.replace('CR', ''))
+                    else:
+                        self.closing_balance = int(self.closing_balance)
+
+    def should_begin_processing_transaction(self, line: str) -> bool:
+        return re.fullmatch(r'\s+DATE\s+DATE\s+DESCRIPTION\s+AMOUNT.*', line) is not None
+
+    def prepare_new_transaction(self, line: str, prev_line: str | None, next_line: str | None) -> Transaction | None:
+        desc = line[BMOMastercardPDFProcessor.DESC_SLICE]
+        amount = line[BMOMastercardPDFProcessor.AMOUNT_SLICE]
+
+        self.logger.debug('d: [%s]', desc)
+        self.logger.debug('a: [%s]', amount)
+
+        tx_matcher = BMOMastercardPDFProcessor.TX_PATTERN.fullmatch(desc)
+        if tx_matcher is None:
+            return None
+
+        self.logger.debug('tx_matcher: %s', tx_matcher.groups())
+
+        note = tx_matcher.group(5).strip()
+        if next_line:
+            next_desc = next_line[BMOMastercardPDFProcessor.DESC_SLICE]
+            next_amount = next_line[BMOMastercardPDFProcessor.AMOUNT_SLICE].strip()
+
+            next_tx_matcher = BMOMastercardPDFProcessor.TX_PATTERN.fullmatch(next_desc)
+            if next_tx_matcher is None and next_desc.strip() != '' and next_amount == '':
+                note += ' ' + next_desc.strip()
+
+        amount = amount.replace(',', '').replace('.', '').strip()
+        if 'CR' in amount:
+            credit = None
+            debit = int(amount.replace('CR', ''))
+        else:
+            credit = int(amount)
+            debit = None
+
+        while '  ' in note:
+            note = note.replace('  ', ' ')
+
+        tx_month = MONTHS.index(tx_matcher.group(1).lower()) + 1
+        post_month = MONTHS.index(tx_matcher.group(3).lower()) + 1
+        assert self.year, 'Statement year not set'
+        tx_date = date(self.year, tx_month, int(tx_matcher.group(2)))
+        post_date = date(self.year, post_month, int(tx_matcher.group(4)))
+        return Transaction(
+            transaction_date=tx_date,
+            post_date=post_date,
+            payee=note,
+            credit=credit,
+            debit=debit,
+            balance=None,
+            note=note,
+        )
+
+    def should_stop_processing_page(self, line: str) -> bool:
+        return '(continued on next page)' in line
+
+    def should_stop_processing_doc(self, line: str) -> bool:
+        if not self.closing_balance:
+            closing_matcher = re.fullmatch(r'\s+Total\s+for\s+card\s+number\s+XXXX\s+XXXX\s+XXXX\s+\d{4}\s+\$([\d,]+\.\d{2})\s+', line)
+            self.logger.debug(closing_matcher)
+            if not closing_matcher:
+                return False
+
+            self.closing_balance = int(closing_matcher.group(1).replace(',', '').replace('.', ''))
+            return True
+        return False
+
+    def post_process_transactions(self, transactions: list[Transaction]) -> list[Transaction]:
+        assert self.opening_balance is not None, 'Open balance not found'
+        assert self.closing_balance is not None, 'Closing balance not found'
+        total_amount = 0
+        for t in transactions:
+            if t.credit is not None:
+                total_amount += t.credit
+                print(f'{t.payee:55s}  {t.credit:8d}  {" ":8s}  {total_amount:8d}')
+            elif t.debit is not None:
+                total_amount -= t.debit
+                print(f'{t.payee:55s}  {" ":8s}  {t.debit:8d}  {total_amount:8d}')
+            else:
+                assert False, f'Transaction has no credit or debit {t}'
+
+        assert total_amount + self.opening_balance == self.closing_balance, 'Balance mismatch'
+        return transactions
+
+class OldBMOMastercardPDFProcessor(BMOMastercardPDFProcessor):
+    DESC_SLICE = slice(None, 85)
+    REF_SLICE = slice(88, 115)
+    AMOUNT_SLICE = slice(118, 135)
+
+    TX_PATTERN = re.compile(r'\s+([A-Z][a-z]{2})\.\s+(\d{1,2})\s+([A-Z][a-z]{2})\.\s+(\d{1,2})\s+(.+)')
+
+    def process_first_page(self, text: str) -> None:
+        for line in text.split('\n'):
+            if not self.year:
+                m = re.fullmatch(r'.*\s+Statement\s+Date\s+[A-Z][a-z]+\.\s+\d{1,2},\s+(\d{4}).*', line)
+                if m:
+                    self.logger.info('Year found: %s', m.group(1))
+                    self.year = int(m.group(1))
+
+            if not self.opening_balance:
+                m = re.fullmatch(r'.*\s+Previous\s+Balance,\s+[A-Z][a-z]{2}\.\s+\d{1,2},\s+\d{4}\s+\$([\d,]+.\d{2}).*', line)
+                if m:
+                    self.logger.info('Open balance found: %s', m.group(1))
+                    self.opening_balance = int(m.group(1).replace(',', '').replace('.', ''))
+
+            if not self.closing_balance:
+                m = re.fullmatch(r'.*\s+New\s+Balance,\s+[A-Z][a-z]{2}\.\s+\d{1,2},\s+\d{4}\s+\$([\d,]+.\d{2})\s+(CR)?.*', line)
+                if m:
+                    self.logger.info('Closing balance found: %s', m.groups())
+                    closing_balance = m.group(1).replace(',', '').replace('.', '')
+                    if m.group(2) == 'CR':
+                        self.closing_balance = -int(closing_balance.replace('CR', ''))
+                    else:
+                        self.closing_balance = int(closing_balance)
+
+            if self.year and self.opening_balance and self.closing_balance:
+                break
+
+    def should_begin_processing_transaction(self, line: str) -> bool:
+        return re.fullmatch(r'\s+DATE\s+DATE\s+DESCRIPTION\s+REFERENCE\sNO\.\s+AMOUNT.*', line) is not None
+
+    def prepare_new_transaction(self, line: str, prev_line: str | None, next_line: str | None) -> Transaction | None:
+        desc = line[OldBMOMastercardPDFProcessor.DESC_SLICE]
+        reference = line[OldBMOMastercardPDFProcessor.REF_SLICE]
+        amount = line[OldBMOMastercardPDFProcessor.AMOUNT_SLICE]
+
+        self.logger.debug('d: [%s]', desc)
+        self.logger.debug('r: [%s]', reference)
+        self.logger.debug('a: [%s]', amount)
+
+        tx_matcher = OldBMOMastercardPDFProcessor.TX_PATTERN.fullmatch(desc)
+        if tx_matcher is None:
+            return None
+
+        self.logger.debug('tx_matcher: %s', tx_matcher.groups())
+
+        note = tx_matcher.group(5).strip()
+
+        amount = amount.replace(',', '').replace('.', '').strip()
+        if 'CR' in amount:
+            credit = None
+            debit = int(amount.replace('CR', ''))
+        else:
+            credit = int(amount)
+            debit = None
+
+        while '  ' in note:
+            note = note.replace('  ', ' ')
+
+        tx_month = MONTHS.index(tx_matcher.group(1).lower()) + 1
+        post_month = MONTHS.index(tx_matcher.group(3).lower()) + 1
+        assert self.year, 'Statement year not set'
+        tx_date = date(self.year, tx_month, int(tx_matcher.group(2)))
+        post_date = date(self.year, post_month, int(tx_matcher.group(4)))
+        return Transaction(
+            transaction_date=tx_date,
+            post_date=post_date,
+            payee=note,
+            credit=credit,
+            debit=debit,
+            balance=None,
+            note=note + ' ' + reference.strip(),
+        )
 
 class RBCChequingPDFProcessor(PDFProcessor):
     pass

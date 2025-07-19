@@ -11,3 +11,6 @@ class Transaction:
     debit: int | None  # in cents
     balance: int | None  # in cents
     note: str
+
+    def __post_init__(self):
+        assert (self.credit is None) != (self.debit is None), f'Invalid transaction {self}'

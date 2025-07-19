@@ -207,4 +207,4 @@ marimo/_lsp/
 __marimo__/
 
 # Local test scripts
-test-bmo-chequing.sh
+test-*.sh
