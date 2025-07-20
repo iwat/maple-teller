@@ -24,6 +24,7 @@ class PDFProcessor(ABC):
                     OldBMOMastercardPDFProcessor,
                     BMOMastercardPDFProcessor,
                     BMOChequingPDFProcessor,
+                    RBCChequingPDFProcessor,
                 ]:
                     processor = processor_cls.try_create_processor(first_page, logger)
                     if processor is not None:
@@ -274,7 +275,7 @@ class BMOMastercardPDFProcessor(PDFProcessor):
             if not self.opening_balance:
                 m = re.fullmatch(r'\s+Previous\s+(?:total\s+)?balance,\s+[A-Z][a-z]{2}\.\s+\d{1,2},\s+\d{4}\s+\$([\d,]+.\d{2}\s+(CR)?).*', line)
                 if m:
-                    self.logger.info('Open balance found: %s', m.group(1))
+                    self.logger.info('Opening balance found: %s', m.group(1))
                     opening_balance = m.group(1).replace(',', '').replace('.', '')
                     if m.group(2):
                         self.opening_balance = -int(opening_balance.replace('CR', ''))
@@ -363,7 +364,7 @@ class BMOMastercardPDFProcessor(PDFProcessor):
         return False
 
     def post_process_transactions(self, transactions: list[Transaction]) -> list[Transaction]:
-        assert self.opening_balance is not None, 'Open balance not found'
+        assert self.opening_balance is not None, 'Opening balance not found'
         assert self.closing_balance is not None, 'Closing balance not found'
         total_amount = 0
         for t in transactions:
@@ -406,7 +407,7 @@ class OldBMOMastercardPDFProcessor(BMOMastercardPDFProcessor):
             if not self.opening_balance:
                 m = re.fullmatch(r'.*\s+Previous\s+Balance,\s+[A-Z][a-z]{2}\.\s+\d{1,2},\s+\d{4}\s+\$([\d,]+.\d{2}).*', line)
                 if m:
-                    self.logger.info('Open balance found: %s', m.group(1))
+                    self.logger.info('Opening balance found: %s', m.group(1))
                     self.opening_balance = int(m.group(1).replace(',', '').replace('.', ''))
 
             if not self.closing_balance:
@@ -469,191 +470,149 @@ class OldBMOMastercardPDFProcessor(BMOMastercardPDFProcessor):
         )
 
 class RBCChequingPDFProcessor(PDFProcessor):
-    pass
+    DESC_SLICE = slice(None, 60)
+    CREDIT_SLICE = slice(68, 85)
+    DEBIT_SLICE = slice(88, 110)
 
-#overrideDuplicates = True # True = assume all 'duplicate' transactions are valid
-#debug = False # prints out one parsed PDF for you to manually test regex on
-#
-#regexes = {
-#    'BMO': {
-#        'txn': (r"^(?P<dates>(?:\w{3}(\.|)+ \d{1,2}\s*){2})"
-#            r"(?P<description>.+)\s"
-#            r"(?P<amount>-?[\d,]+\.\d{2})(?P<cr>(\-|\s*CR))?"),
-#        'startyear': r'Statement period\s\w+\.?\s{1}\d+\,\s{1}(?P<year>[0-9]{4})',
-#        'openbal': r'Previous balance.*(?P<balance>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?',
-#        'closingbal': r'(?:Total) balance\s.*(?P<balance>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?'
-#    },
-#    'RBC': {
-#        'txn': (r"^(?P<dates>(?:\w{3} \d{2} ){2})"
-#            r"(?P<description>.+)\s"
-#            r"(?P<amount>-?\$[\d,]+\.\d{2}-?)(?P<cr>(\-|\s?CR))?"),
-#        'startyear': r'STATEMENT FROM .+(?P<year>-?\,.[0-9][0-9][0-9][0-9])',
-#        'openbal': r'(PREVIOUS|Previous) (STATEMENT|ACCOUNT|Account) (BALANCE|Balance) (?P<balance>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?',
-#        'closingbal': r'(?:NEW|CREDIT) BALANCE (?P<balance>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?'
-#    },
-#    'MFC': {
-#        'txn': (r"^(?P<dates>(?:\d{2}\/\d{2} ){2})"
-#            r"(?P<description>.+)\s"
-#            r"(?P<amount>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?"),
-#        'startyear': r'Statement Period: .+(?P<year>-?\,.[0-9][0-9][0-9][0-9])',
-#        'openbal': r'(PREVIOUS|Previous) (BALANCE|Balance) (?P<balance>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?',
-#        'closingbal': r'(?:New) Balance (?P<balance>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?'
-#    },
-#    'TD': {
-#        'txn': (r"(?P<dates>(?:\w{3} \d{1,2} ){2})"
-#            r"(?P<description>.+)\s"
-#            r"(?P<amount>-?\$[\d,]+\.\d{2}-?)(?P<cr>(\-|\s?CR))?"),
-#        'startyear': r'Statement Period: .+(?P<year>-?\,.[0-9][0-9][0-9][0-9])',
-#        'openbal': r'(PREVIOUS|Previous) (STATEMENT|ACCOUNT|Account) (BALANCE|Balance) (?P<balance>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?',
-#        'closingbal': r'(?:NEW|CREDIT) BALANCE (?P<balance>\-?\s?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?'
-#    },
-#    'AMEX': {
-#        'txn': (r"(?P<dates>(?:\w{3} \d{1,2} ){2})"
-#            r"(?P<description>.+)\s"
-#            r"(?P<amount>-?[\d,]+\.\d{2}-?)(?P<cr>(\-|\s?CR))?"),
-#        'startyear': r'(?P<year>-?\,.[0-9][0-9][0-9][0-9])',
-#        'openbal': r'(PREVIOUS|Previous) (BALANCE|Balance) (?P<balance>-?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?',
-#        'closingbal': r'(?:New|CREDIT) Balance (?P<balance>\-?\s?\$[\d,]+\.\d{2})(?P<cr>(\-|\s?CR))?'
-#    },
-#}
-#
-#def get_transactions(data_directory):
-#    result = set()
-#    for pdf_path in Path(data_directory).rglob('*.pdf'):
-#        try:
-#            if pdf_path.parts[-2] == TARGET_FI:
-#                result |= _parse_visa(pdf_path)
-#        except Exception as e:
-#            print("Error for %s" % pdf_path)
-#            print(e)
-#    return result
-#
-#def _parse_visa(pdf_path):
-#    result = set()
-#    text = ""
-#    with pdfplumber.open(pdf_path) as pdf:
-#        print("------------------------------------------")
-#        print(pdf_path)
-#        for page in pdf.pages:
-#            text += page.extract_text(x_tolerance=1)
-#
-#        if (debug):
-#            print(text)
-#            exit()
-#
-#        year = _get_start_year(text, TARGET_FI)
-#        opening_bal = _get_opening_bal(text, TARGET_FI)
-#        closing_bal = _get_closing_bal(text, TARGET_FI)
-#        # add_seconds = 0
-#
-#        endOfYearWarning = False
-#
-#        # debugging transaction mapping - all 3 regex in 'txn' have to find a result in order for it to be considered a 'match'
-#        for match in re.finditer(regexes[TARGET_FI]['txn'], text, re.MULTILINE):
-#            match_dict = match.groupdict()
-#            date = match_dict['dates'].replace('/', ' ') # change format to standard: 03/13 -> 03 13
-#            date = date.split(' ')[0:2]  # Aug. 10 Aug. 13 -> ['Aug.', '10']
-#            date[0] = date[0].strip('.') # Aug. -> Aug
-#            date.append(str(year))
-#            date = ' '.join(date) # ['Aug', '10', '2021'] -> Aug 10 2021
-#
-#            try:
-#                date = datetime.strptime(date, '%b %d %Y') # try Aug 10 2021 first
-#            except: # yes I know this is horrible, but this script runs once if you download your .csvs monthly, what do you want from me
-#                date = datetime.strptime(date, '%m %d %Y') # if it fails, 08 10 2021
-#
-#            # need to account for current year (Jan) and previous year (Dec) in statements
-#            endOfYearCheck = date.strftime("%m")
-#
-#            if (endOfYearCheck == '12' and endOfYearWarning == False):
-#                endOfYearWarning = True
-#            if (endOfYearCheck == '01' and endOfYearWarning):
-#                date = date + relativedelta(years = 1)
-#
-#            if (match_dict['cr']):
-#                print("Credit balance found in transaction: '%s'" % match_dict['amount'])
-#                amount = -float("-" + match_dict['amount'].replace('$', '').replace(',', ''))
-#            else:
-#                amount = -float(match_dict['amount'].replace('$', '').replace(',', ''))
-#
-#            # checks description regex
-#            if ('$' in match_dict['description'] and TARGET_FI != 'BMO'): # BMO doesn't have $'s in their descriptions, so this is safe
-#                print("************" + match_dict['description'])
-#                newAmount = re.search(r'(?P<amount>-?\$[\d,]+\.\d{2}-?)(?P<cr>(\-|\s?CR))?', match_dict['description'])
-#                amount = -float(newAmount['amount'].replace('$', '').replace(',', ''))
-#                match_dict['description'] = match_dict['description'].split('$', 1)[0]
-#
-#            transaction = Transaction(AccountType[TARGET_FI],
-#                                      str(date.date().isoformat()),
-#                                      match_dict['description'],
-#                                      amount)
-#            if (transaction in result):
-#                if (overrideDuplicates):
-#                    transaction.description = transaction.description + " 2"
-#                    result.add(transaction)
-#                else:
-#                    prompt = input("Duplicate transaction found for %s, on %s for %f. Do you want to add this again? " % (transaction.description, transaction.date, transaction.amount)).lower()
-#                    if (prompt == 'y'):
-#                        transaction.description = transaction.description + " 2"
-#                        result.add(transaction)
-#                    else:
-#                        print("Ignoring!")
-#            else:
-#                result.add(transaction)
-#    _validate(closing_bal, opening_bal, result)
-#    return result
-#
-#def _validate(closing_bal, opening_bal, transactions):
-#    # spend transactions are negative numbers.
-#    # net will most likely be a neg number unless your payments + cash back are bigger than spend
-#    # outflow is less than zero, so purchases
-#    # inflow is greater than zero, so payments/cashback
-#
-#    # closing balance is a positive number
-#    # opening balance is only negative if you have a CR, otherwise also positive
-#    net = round(sum([r.amount for r in transactions]), 2)
-#    outflow = round(sum([r.amount for r in transactions if r.amount < 0]), 2)
-#    inflow = round(sum([r.amount for r in transactions if r.amount > 0]), 2)
-#    if round(opening_bal - closing_bal, 2) != net:
-#        print("* the diff is: %f vs. %f" % (opening_bal - closing_bal, net))
-#        print(f"* Opening reported at {opening_bal}")
-#        print(f"* Closing reported at {closing_bal}")
-#        print(f"* Transactions (net/inflow/outflow): {net} / {inflow} / {outflow}")
-#        print("* Parsed transactions:")
-#        for t in sorted(list(transactions), key=lambda t: t.date):
-#            print(t)
-#        raise AssertionError("Discrepancy found, bad parse :(. Not all transcations are accounted for, validate your transaction regex.")
-#
-#def _get_start_year(pdf_text, fi):
-#    print("Getting year...")
-#    match = re.search(regexes[fi]['startyear'], pdf_text, re.IGNORECASE)
-#    year = int(match.groupdict()['year'].replace(', ', ''))
-#    print("YEAR IS: %d" % year)
-#    return year
-#
-#
-#def _get_opening_bal(pdf_text, fi):
-#    print("Getting opening balance...")
-#    match = re.search(regexes[fi]['openbal'], pdf_text)
-#    if (match.groupdict()['cr'] and '-' not in match.groupdict()['balance']):
-#        balance = float("-" + match.groupdict()['balance'].replace('$', ''))
-#        print("Patched credit balance found for opening balance: %f" % balance)
-#        return balance
-#
-#    balance = float(match.groupdict()['balance'].replace(',', '').replace('$', ''))
-#    print("Opening balance: %f" % balance)
-#    return balance
-#
-#
-#def _get_closing_bal(pdf_text, fi):
-#    print("Getting closing balance...")
-#    match = re.search(regexes[fi]['closingbal'], pdf_text)
-#    if (match.groupdict()['cr'] and '-' not in match.groupdict()['balance']):
-#        balance = float("-" + match.groupdict()['balance'].replace('$', ''))
-#        print("Patched credit balance found for closing balance: %f" % balance)
-#        return balance
-#
-#    balance = float(match.groupdict()['balance'].replace(',', '').replace('$', '').replace(' ', ''))
-#    print("Closing balance: %f" % balance)
-#    return balance
-#
+    TX_PATTERN = re.compile(r'\s+(\d{1,2})\s+([A-Z][a-z]{2})\s+(.+)')
+
+    @classmethod
+    def try_create_processor(cls, first_page: str, logger: logging.Logger) -> Self | None:
+        if re.search(r'\s*Royal\s+Bank\s+of\s+Canada\s*', first_page):
+            logger.info('Found RBC header')
+            if re.search(r'.*Total\s+deposits.*', first_page):
+                logger.info('Definitely an RBC bank account')
+                return cls(logger)
+        return None
+
+    def __init__(self, logger: logging.Logger):
+        super().__init__(logger)
+        self.year = None
+        self.opening_balance = None
+        self.closing_balance = None
+        self.last_transaction_date = None
+        self.pending_tx = None
+
+    def extract_text(self, page: pdfplumber.page.Page) -> str:
+        return page.extract_text(layout=True, x_density=4.5, x_tolerance=1)
+
+    def process_first_page(self, text: str) -> None:
+        for line in text.split('\n'):
+            if not self.opening_balance:
+                m = re.fullmatch(r'\s+Your\s+opening\s+balance\s+(?:on\s+[A-Z][a-z]*\s+\d+,\s+\d{4}\s+(-\s*)?)?\$([\d,]+.\d{2}).*', line)
+                if m:
+                    self.logger.info('Opening balance found: %s%s', m.group(1), m.group(2))
+                    opening_balance = m.group(2).replace(',', '').replace('.', '')
+                    if m.group(1) and m.group(1).strip() == '-':
+                        self.opening_balance = -int(opening_balance)
+                    else:
+                        self.opening_balance = int(opening_balance)
+
+            if not self.closing_balance:
+                m = re.fullmatch(r'\s+Your\s+closing\s+balance\s+on\s+([A-Z][a-z]{2})[a-z]*\s+(\d+),\s+(\d{4})\s+=\s+(-\s*)?\$([\d,]+.\d{2}).*', line)
+                if m:
+                    self.logger.info('Closing balance found: %s%s', m.group(4), m.group(5))
+                    closing_balance = m.group(5).replace(',', '').replace('.', '')
+                    if m.group(4) and m.group(4).strip() == '-':
+                        self.closing_balance = -int(closing_balance)
+                    else:
+                        self.closing_balance = int(closing_balance)
+
+                    self.logger.info('Year found: %s', m.group(3))
+                    self.year = int(m.group(3))
+
+    def should_begin_processing_transaction(self, line: str) -> bool:
+        return re.fullmatch(r'\s+Date\s+Description\s+Withdrawals\s+.*', line) is not None
+
+    def prepare_new_transaction(self, line: str, prev_line: str | None, next_line: str | None) -> Transaction | None:
+        if any([
+            'No activity for this period' in line,
+            'Opening Balance' in line
+        ]):
+            return None
+
+        desc = line[RBCChequingPDFProcessor.DESC_SLICE]
+        credit = line[RBCChequingPDFProcessor.CREDIT_SLICE]
+        debit = line[RBCChequingPDFProcessor.DEBIT_SLICE]
+
+        self.logger.debug('D: [%s]', desc)
+        self.logger.debug('c: [%s]', credit)
+        self.logger.debug('d: [%s]', debit)
+
+        tx_matcher = RBCChequingPDFProcessor.TX_PATTERN.fullmatch(desc)
+        if tx_matcher:
+            tx_month = MONTHS.index(tx_matcher.group(2).lower()) + 1
+            assert self.year, 'Statement year not set'
+            note = tx_matcher.group(3).strip()
+            tx_date = date(self.year, tx_month, int(tx_matcher.group(1)))
+        else:
+            note = desc.strip()
+            assert self.last_transaction_date, 'Last transaction date not set'
+            tx_date = self.last_transaction_date
+
+        if credit.strip() == '' and debit.strip() == '':
+            if self.pending_tx:
+                self.pending_tx.payee += ' ' + note
+                self.pending_tx.note += ' ' + note
+            else:
+                self.pending_tx = Transaction(tx_date, tx_date, note, 0, None, None, note)
+            self.last_transaction_date = tx_date
+            return None
+
+        if credit.strip():
+            credit = int(credit.replace(',', '').replace('.', ''))
+            debit = None
+        elif debit.strip():
+            credit = None
+            debit = int(debit.replace(',', '').replace('.', ''))
+        else:
+            raise ValueError('Invalid transaction')
+
+        if self.pending_tx:
+            self.pending_tx.payee += ' ' + note
+            self.pending_tx.note += ' ' + note
+
+            self.pending_tx.credit = credit
+            self.pending_tx.debit = debit
+            self.pending_tx.__post_init__()
+            returning_tx = self.pending_tx
+            self.pending_tx = None
+        else:
+            returning_tx = Transaction(tx_date, tx_date, note, credit, debit, None, note)
+
+        self.last_transaction_date = tx_date
+
+        while '  ' in returning_tx.payee:
+            returning_tx.payee = returning_tx.payee.replace('  ', ' ')
+        while '  ' in returning_tx.note:
+            returning_tx.note = returning_tx.note.replace('  ', ' ')
+
+        return returning_tx
+
+    def should_stop_processing_page(self, line: str) -> bool:
+        return any([
+            'Please check this Account Statement without delay' in line,
+            'Closing Balance' in line,
+            'No activity for this period' in line,
+        ])
+
+    def should_stop_processing_doc(self, line: str) -> bool:
+        return False
+
+    def post_process_transactions(self, transactions: list[Transaction]) -> list[Transaction]:
+        assert self.opening_balance is not None, 'Opening balance not found'
+        assert self.closing_balance is not None, 'Closing balance not found'
+        total_amount = 0
+        for t in transactions:
+            if t.credit is not None:
+                total_amount -= t.credit
+                print(f'{t.payee:60s}  {t.credit:8d}  {" ":8s}  {total_amount:8d}')
+            elif t.debit is not None:
+                total_amount += t.debit
+                print(f'{t.payee:60s}  {" ":8s}  {t.debit:8d}  {total_amount:8d}')
+            else:
+                assert False, f'Transaction has no credit or debit {t}'
+
+        assert total_amount + self.opening_balance == self.closing_balance, \
+                f'Balance mismatch ({total_amount} + {self.opening_balance}) ≠ {self.closing_balance}'
+        return transactions
