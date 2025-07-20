@@ -29,19 +29,25 @@ class PDFProcessor(ABC):
         logger.info('Processing file %s', file)
         with pdfplumber.open(file) as pdf:
             with pdfplumber.open(file) as pdf:
-                first_page = pdf.pages[0].extract_text(layout=True, x_tolerance=1)
-
                 processor = None
-                for processor_cls in [
-                    OldBMOMastercardPDFProcessor,
-                    BMOMastercardPDFProcessor,
-                    BMOChequingPDFProcessor,
-                    RBCChequingPDFProcessor,
-                    RBCMastercardPDFProcessor,
-                ]:
-                    processor = processor_cls.try_create_processor(first_page, logger)
+                for page in pdf.pages:
+                    page_content = page.extract_text(layout=True, x_tolerance=1)
+
+                    for processor_cls in [
+                        OldBMOMastercardPDFProcessor,
+                        BMOMastercardPDFProcessor,
+                        BMOChequingPDFProcessor,
+                        RBCChequingPDFProcessor,
+                        RBCMastercardPDFProcessor,
+                        RBCInvestPDFProcessor,
+                    ]:
+                        processor = processor_cls.try_create_processor(page_content, logger)
+                        if processor is not None:
+                            break
                     if processor is not None:
                         break
+
+                first_page = pdf.pages[0].extract_text(layout=True, x_tolerance=1)
 
                 if processor is None:
                     print(first_page, file=sys.stderr)
@@ -151,7 +157,7 @@ class BMOChequingPDFProcessor(PDFProcessor):
 
     def __init__(self, logger: logging.Logger):
         super().__init__(logger)
-        self.year = None
+        self.closing_year = None
         self.closing_debit = None
         self.closing_cretit = None
 
@@ -163,10 +169,10 @@ class BMOChequingPDFProcessor(PDFProcessor):
             m = re.fullmatch(r'\s+For\s+the\s+period\s+ending\s+[A-Z][a-z]+\s+\d{2},\s+(\d{4}).*', line)
             if m:
                 self.logger.info('Year found: %s', m.group(1))
-                self.year = int(m.group(1))
+                self.closing_year = int(m.group(1))
                 break
 
-        assert self.year is not None, 'Year not found'
+        assert self.closing_year is not None, 'Year not found'
 
     def should_begin_processing_transaction(self, line: str) -> bool:
         return re.fullmatch(r'\s+Date\s+Description\s+.*', line) is not None
@@ -228,8 +234,8 @@ class BMOChequingPDFProcessor(PDFProcessor):
             return None
 
         month = MONTHS.index(tx_matcher.group(1).lower()) + 1
-        assert self.year, 'Statement year not set'
-        tx_date = date(self.year, month, int(tx_matcher.group(2)))
+        assert self.closing_year, 'Statement year not set'
+        tx_date = date(self.closing_year, month, int(tx_matcher.group(2)))
         return Transaction(
             tx_date=tx_date,
             post_date=tx_date,
@@ -281,7 +287,7 @@ class BMOMastercardPDFProcessor(PDFProcessor):
 
     def __init__(self, logger: logging.Logger):
         super().__init__(logger)
-        self.year = None
+        self.closing_year = None
         self.opening_balance = None
         self.closing_balance = None
 
@@ -300,11 +306,11 @@ class BMOMastercardPDFProcessor(PDFProcessor):
                     else:
                         self.opening_balance = int(opening_balance)
 
-            if not self.year:
+            if not self.closing_year:
                 m = re.fullmatch(r'.*\s+Statement\s+date\s+[A-Z][a-z]+\.\s+\d{1,2},\s+(\d{4}).*', line)
                 if m:
                     self.logger.info('Year found: %s', m.group(1))
-                    self.year = int(m.group(1))
+                    self.closing_year = int(m.group(1))
 
             if not self.closing_balance:
                 m = re.fullmatch(r'\s+Total\s+balance\s+\$([\d,]+.\d{2})\s+(CR)?.*', line)
@@ -353,9 +359,9 @@ class BMOMastercardPDFProcessor(PDFProcessor):
 
         tx_month = MONTHS.index(tx_matcher.group(1).lower()) + 1
         post_month = MONTHS.index(tx_matcher.group(3).lower()) + 1
-        assert self.year, 'Statement year not set'
-        tx_date = date(self.year, tx_month, int(tx_matcher.group(2)))
-        post_date = date(self.year, post_month, int(tx_matcher.group(4)))
+        assert self.closing_year, 'Statement year not set'
+        tx_date = date(self.closing_year, tx_month, int(tx_matcher.group(2)))
+        post_date = date(self.closing_year, post_month, int(tx_matcher.group(4)))
         return Transaction(
             tx_date=tx_date,
             post_date=post_date,
@@ -415,11 +421,11 @@ class OldBMOMastercardPDFProcessor(BMOMastercardPDFProcessor):
 
     def process_first_page(self, text: str) -> None:
         for line in text.split('\n'):
-            if not self.year:
+            if not self.closing_year:
                 m = re.fullmatch(r'.*\s+Statement\s+Date\s+[A-Z][a-z]+\.\s+\d{1,2},\s+(\d{4}).*', line)
                 if m:
                     self.logger.info('Year found: %s', m.group(1))
-                    self.year = int(m.group(1))
+                    self.closing_year = int(m.group(1))
 
             if not self.opening_balance:
                 m = re.fullmatch(r'.*\s+Previous\s+Balance,\s+[A-Z][a-z]{2}\.\s+\d{1,2},\s+\d{4}\s+\$([\d,]+.\d{2}).*', line)
@@ -437,7 +443,7 @@ class OldBMOMastercardPDFProcessor(BMOMastercardPDFProcessor):
                     else:
                         self.closing_balance = int(closing_balance)
 
-        assert self.year, 'Statement year not set'
+        assert self.closing_year, 'Statement year not set'
         assert self.opening_balance is not None, 'Opening balance not set'
         assert self.closing_balance is not None, 'Closing balance not set'
 
@@ -473,9 +479,9 @@ class OldBMOMastercardPDFProcessor(BMOMastercardPDFProcessor):
 
         tx_month = MONTHS.index(tx_matcher.group(1).lower()) + 1
         post_month = MONTHS.index(tx_matcher.group(3).lower()) + 1
-        assert self.year, 'Statement year not set'
-        tx_date = date(self.year, tx_month, int(tx_matcher.group(2)))
-        post_date = date(self.year, post_month, int(tx_matcher.group(4)))
+        assert self.closing_year, 'Statement year not set'
+        tx_date = date(self.closing_year, tx_month, int(tx_matcher.group(2)))
+        post_date = date(self.closing_year, post_month, int(tx_matcher.group(4)))
         return Transaction(
             tx_date=tx_date,
             post_date=post_date,
@@ -504,7 +510,7 @@ class RBCChequingPDFProcessor(PDFProcessor):
 
     def __init__(self, logger: logging.Logger):
         super().__init__(logger)
-        self.year = None
+        self.closing_year = None
         self.opening_balance = None
         self.closing_balance = None
         self.last_transaction_date = None
@@ -530,9 +536,9 @@ class RBCChequingPDFProcessor(PDFProcessor):
                     self.closing_balance = int(closing_balance)
 
                     self.logger.info('Year found: %s', m.group(3))
-                    self.year = int(m.group(3))
+                    self.closing_year = int(m.group(3))
 
-        assert self.year, 'Statement year not set'
+        assert self.closing_year, 'Statement year not set'
         assert self.opening_balance is not None, 'Opening balance not set'
         assert self.closing_balance is not None, 'Closing balance not set'
 
@@ -557,9 +563,9 @@ class RBCChequingPDFProcessor(PDFProcessor):
         tx_matcher = RBCChequingPDFProcessor.TX_PATTERN.fullmatch(desc)
         if tx_matcher:
             tx_month = MONTHS.index(tx_matcher.group(2).lower()) + 1
-            assert self.year, 'Statement year not set'
+            assert self.closing_year, 'Statement year not set'
             note = tx_matcher.group(3).strip()
-            tx_date = date(self.year, tx_month, int(tx_matcher.group(1)))
+            tx_date = date(self.closing_year, tx_month, int(tx_matcher.group(1)))
         else:
             note = desc.strip()
             assert self.last_transaction_date, 'Last transaction date not set'
@@ -642,7 +648,7 @@ class RBCMastercardPDFProcessor(PDFProcessor):
         super().__init__(logger)
         self.opening_balance = None
         self.closing_balance = None
-        self.year = None
+        self.closing_year = None
 
     def extract_text(self, page: pdfplumber.page.Page) -> str:
         cropped_box = (0, 0, 0.6 * page.width, page.height)
@@ -656,11 +662,11 @@ class RBCMastercardPDFProcessor(PDFProcessor):
 
     def process_first_page(self, text: str) -> None:
         for line in text.split('\n'):
-            if not self.year:
+            if not self.closing_year:
                 m = re.match(r'.*STATEMENT\s+FROM\s+(\w+)\s+(\d+)(?:,\s+(\d{4}))?\s+TO\s+(\w+)\s+(\d+),\s+(\d{4}).*', line)
                 if m:
                     self.logger.info('Year %s', m.group(6))
-                    self.year = int(m.group(6))
+                    self.closing_year = int(m.group(6))
             if not self.opening_balance:
                 m = re.match(r'.*Previous\s+(?:Statement|Account)\s+Balance\s+((?:-)?\$[\d,]+\.\d{2}).*', line)
                 if m:
@@ -672,7 +678,7 @@ class RBCMastercardPDFProcessor(PDFProcessor):
                     self.logger.info('Closing balance %s', m.group(1))
                     self.closing_balance = int(sanitize_amount(m.group(1)))
 
-        assert self.year, 'Statement year not set'
+        assert self.closing_year, 'Statement year not set'
         assert self.opening_balance is not None, 'Opening balance not set'
         assert self.closing_balance is not None, 'Closing balance not set'
 
@@ -680,7 +686,7 @@ class RBCMastercardPDFProcessor(PDFProcessor):
         return re.match(r'.*DATE\s+DATE\s+.*', line) is not None
 
     def prepare_new_transaction(self, line: str, prev_line: str | None, next_line: str | None) -> Transaction | None:
-        assert self.year, 'Statement year not set'
+        assert self.closing_year, 'Statement year not set'
 
         desc = line[:74]
         amount = line[76:93]
@@ -688,9 +694,9 @@ class RBCMastercardPDFProcessor(PDFProcessor):
         m = re.match(r'\s+([A-Z]{3})\s+(\d{2})\s+([A-Z]{3})\s+(\d{2})\s+(.+)', desc)
         if m:
             tx_month = MONTHS.index(m.group(1).lower()) + 1
-            tx_date = date(self.year, tx_month, int(m.group(2)))
+            tx_date = date(self.closing_year, tx_month, int(m.group(2)))
             post_month = MONTHS.index(m.group(3).lower()) + 1
-            post_date = date(self.year, post_month, int(m.group(4)))
+            post_date = date(self.closing_year, post_month, int(m.group(4)))
             payee = m.group(5).strip()
 
             if any([
@@ -746,4 +752,156 @@ class RBCMastercardPDFProcessor(PDFProcessor):
                 self.logger.debug('%-60s  %8s  %8d  %8d', tx.payee, '', tx.debit, new_balance)
 
         assert new_balance == self.closing_balance, 'Balance mismatch'
+        return transactions
+
+class RBCInvestPDFProcessor(PDFProcessor):
+    AMOUNT_SLICE = slice(65, 82)
+
+    @classmethod
+    def try_create_processor(cls, first_page: str, logger: logging.Logger) -> Self | None:
+        if 'Royal Mutual Funds Inc.' in first_page:
+            logger.debug('Definitely RBC Mutual Funds')
+            return cls(logger)
+        return None
+
+    def __init__(self, logger: logging.Logger):
+        super().__init__(logger)
+        self.opening_balance = 0
+        self.closing_balance = None
+        self.amount_in = None
+        self.amount_out = None
+        self.change_in_value = None
+        self.closing_date = None
+
+    def extract_text(self, page: pdfplumber.page.Page) -> str:
+        return page.extract_text(layout=True, x_density=4.5, x_tolerance=1)
+
+    def process_first_page(self, text: str) -> None:
+        for line in text.split('\n'):
+            if self.closing_date is None:
+                m = re.fullmatch(r'\s+[A-Z][a-z]+\s+\d+,\s+\d{4}\s+to\s+([A-Z][a-z]{2})[a-z]*\s+(\d+),\s+(\d{4})\s*', line)
+                if m:
+                    self.logger.debug('Closing year: [%s]', m.group(1))
+                    year = int(m.group(3))
+                    month = MONTHS.index(m.group(1).lower()) + 1
+                    day = int(m.group(2))
+                    self.closing_date = date(year, month, day)
+
+        assert self.closing_date is not None, 'Closing date not found'
+
+    def should_begin_processing_transaction(self, line: str) -> bool:
+        return True
+
+    def prepare_new_transaction(self, line: str, prev_line: str | None, next_line: str | None) -> Transaction | None:
+        if self.opening_balance == 0:
+            if re.match(r'\s*Beginning\s+account\s+value\s*', line):
+                self.logger.debug('Opening balance: [%s]', line[RBCInvestPDFProcessor.AMOUNT_SLICE])
+                if line[RBCInvestPDFProcessor.AMOUNT_SLICE].strip() != '':
+                    self.opening_balance = int(sanitize_amount(line[RBCInvestPDFProcessor.AMOUNT_SLICE]))
+                    return None
+
+        if self.closing_balance is None:
+            if re.match(r'\s*Value\s+of\s+your\s+account\s+on\s*', line):
+                self.logger.debug('Closing balance: [%s]', line[RBCInvestPDFProcessor.AMOUNT_SLICE])
+                self.closing_balance = int(sanitize_amount(line[RBCInvestPDFProcessor.AMOUNT_SLICE]))
+                return None
+
+        if self.amount_in is None:
+            if re.match(r'\s*Amount\s+in\s*', line):
+                try:
+                    self.logger.debug('Amount in: [%s]', line[RBCInvestPDFProcessor.AMOUNT_SLICE])
+                    self.amount_in = int(sanitize_amount(line[RBCInvestPDFProcessor.AMOUNT_SLICE]))
+                except ValueError:
+                    self.amount_in = 0
+                return None
+
+        if self.amount_out is None:
+            if re.match(r'\s*Amount\s+out\s*', line):
+                try:
+                    self.logger.debug('Amount out: [%s]', line[RBCInvestPDFProcessor.AMOUNT_SLICE])
+                    self.amount_out = -int(sanitize_amount(line[RBCInvestPDFProcessor.AMOUNT_SLICE]))
+                except ValueError:
+                    self.amount_out = 0
+                return None
+
+        if self.change_in_value is None:
+            if re.match(r'\s*Change\s+in\s+the\s+value\s+of\s+your\s+account\s*', line):
+                if line[65:80].strip() != '':
+                    try:
+                        self.logger.debug('Change in value: [%s]', line[RBCInvestPDFProcessor.AMOUNT_SLICE])
+                        self.change_in_value = int(sanitize_amount(line[RBCInvestPDFProcessor.AMOUNT_SLICE]))
+                    except ValueError:
+                        self.change_in_value = 0
+                    return None
+
+        return None
+
+    def should_stop_processing_page(self, line: str) -> bool:
+        return False
+
+    def should_stop_processing_doc(self, line: str) -> bool:
+        return all([
+            self.closing_date is not None,
+            self.closing_balance is not None,
+            self.amount_in is not None,
+            self.amount_out is not None,
+            self.change_in_value is not None,
+        ])
+
+    def post_process_transactions(self, transactions: list[Transaction]) -> list[Transaction]:
+        assert self.closing_date is not None, 'Closing date not found'
+        assert self.closing_balance is not None, 'Closing balance not found'
+        assert self.amount_in is not None, 'Amount in not found'
+        assert self.amount_out is not None, 'Amount out not found'
+        assert self.change_in_value is not None, 'Change in value not found'
+
+        self.logger.debug('Opening balance: %d', self.opening_balance)
+        self.logger.debug('Amount in: %d', self.amount_in)
+        self.logger.debug('Amount out: %d', self.amount_out)
+        self.logger.debug('Change in value: %d', self.change_in_value)
+        self.logger.debug('Closing balance: %d', self.closing_balance)
+        assert self.opening_balance + self.amount_in - self.amount_out + self.change_in_value == self.closing_balance, 'Balance mismatch'
+
+        transactions = []
+        if self.amount_in > 0:
+            transactions.append(Transaction(
+                tx_date=self.closing_date,
+                post_date=self.closing_date,
+                payee='Deposit',
+                credit=None,
+                debit=self.amount_in,
+                balance=None,
+                note=None,
+            ))
+        if self.amount_out > 0:
+            transactions.append(Transaction(
+                tx_date=self.closing_date,
+                post_date=self.closing_date,
+                payee='Withdrawal',
+                credit=self.amount_in,
+                debit=None,
+                balance=None,
+                note=None,
+            ))
+        if self.change_in_value > 0:
+            transactions.append(Transaction(
+                tx_date=self.closing_date,
+                post_date=self.closing_date,
+                payee='Unrealized Profit',
+                credit=None,
+                debit=self.change_in_value,
+                balance=None,
+                note=None,
+            ))
+        elif self.change_in_value < 0:
+            transactions.append(Transaction(
+                tx_date=self.closing_date,
+                post_date=self.closing_date,
+                payee='Unrealized Loss',
+                credit=-self.change_in_value,
+                debit=None,
+                balance=None,
+                note=None,
+            ))
+
         return transactions

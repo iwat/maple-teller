@@ -1,6 +1,7 @@
 import argparse
 import logging
-import sys
+
+from tabulate import tabulate
 
 from mapleteller.domain.services import PDFProcessor
 
@@ -19,4 +20,12 @@ def main():
         module_logger.setLevel(logging.DEBUG)
     else:
         module_logger.setLevel(logging.INFO)
-    PDFProcessor.process(args.file, module_logger)
+
+    transactions = PDFProcessor.process(args.file, module_logger)
+    rows = []
+    for tx in transactions:
+        if tx.credit is not None:
+            rows.append([tx.tx_date, tx.payee, -tx.credit])
+        else:
+            rows.append([tx.tx_date, tx.payee, tx.debit])
+    print(tabulate(rows))

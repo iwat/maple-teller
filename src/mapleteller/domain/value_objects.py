@@ -14,3 +14,7 @@ class Transaction:
 
     def __post_init__(self):
         assert (self.credit is None) != (self.debit is None), f'Invalid transaction {self}'
+        if self.credit is not None:
+            assert self.credit >= 0, f'Invalid transaction {self}'
+        if self.debit is not None:
+            assert self.debit >= 0, f'Invalid transaction {self}'
