@@ -19,7 +19,7 @@ def sanitize_string(s: str) -> str:
 
 
 def sanitize_amount(s: str) -> str:
-    return s.replace(',', '').replace('.', '').replace('$', '').strip()
+    return s.replace(' ', '').replace(',', '').replace('.', '').replace('$', '').strip()
 
 
 class PDFProcessor(ABC):
@@ -515,24 +515,18 @@ class RBCChequingPDFProcessor(PDFProcessor):
     def process_first_page(self, text: str) -> None:
         for line in text.split('\n'):
             if not self.opening_balance:
-                m = re.fullmatch(r'\s+Your\s+opening\s+balance\s+(?:on\s+[A-Z][a-z]*\s+\d+,\s+\d{4}\s+(-\s*)?)?\$([\d,]+.\d{2}).*', line)
+                m = re.fullmatch(r'\s+Your\s+opening\s+balance\s+(?:on\s+[A-Z][a-z]*\s+\d+,\s+\d{4}\s+)?((?:-\s*)?\$[\d,]+.\d{2}).*', line)
                 if m:
-                    self.logger.info('Opening balance found: %s%s', m.group(1), m.group(2))
-                    opening_balance = sanitize_amount(m.group(2))
-                    if m.group(1) and m.group(1).strip() == '-':
-                        self.opening_balance = -int(opening_balance)
-                    else:
-                        self.opening_balance = int(opening_balance)
+                    self.logger.info('Opening balance found: %s', m.group(1))
+                    opening_balance = sanitize_amount(m.group(1))
+                    self.opening_balance = int(opening_balance)
 
             if not self.closing_balance:
-                m = re.fullmatch(r'\s+Your\s+closing\s+balance\s+on\s+([A-Z][a-z]{2})[a-z]*\s+(\d+),\s+(\d{4})\s+=\s+(-\s*)?\$([\d,]+.\d{2}).*', line)
+                m = re.fullmatch(r'\s+Your\s+closing\s+balance\s+on\s+([A-Z][a-z]{2})[a-z]*\s+(\d+),\s+(\d{4})\s+=\s+((?:-\s*)?\$[\d,]+.\d{2}).*', line)
                 if m:
-                    self.logger.info('Closing balance found: %s%s', m.group(4), m.group(5))
-                    closing_balance = sanitize_amount(m.group(5))
-                    if m.group(4) and m.group(4).strip() == '-':
-                        self.closing_balance = -int(closing_balance)
-                    else:
-                        self.closing_balance = int(closing_balance)
+                    self.logger.info('Closing balance found: %s', m.group(4))
+                    closing_balance = sanitize_amount(m.group(4))
+                    self.closing_balance = int(closing_balance)
 
                     self.logger.info('Year found: %s', m.group(3))
                     self.year = int(m.group(3))
