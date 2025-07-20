@@ -1,5 +1,6 @@
 import logging
 import re
+import sys
 from abc import ABC, abstractmethod
 from datetime import date
 from typing import Self
@@ -43,13 +44,13 @@ class PDFProcessor(ABC):
                         break
 
                 if processor is None:
-                    print(first_page)
+                    print(first_page, file=sys.stderr)
                     raise ValueError('No idea what this is')
 
                 try:
                     processor.process_first_page(first_page)
                 except Exception:
-                    print(first_page)
+                    print(first_page, file=sys.stderr)
                     raise
 
                 transactions = []
@@ -250,10 +251,10 @@ class BMOChequingPDFProcessor(PDFProcessor):
         total_debit = 0
         for t in transactions:
             if t.credit is not None:
-                print(f'{t.payee:55s}  {t.credit:8d}  {" ":8s}  {total_credit:8d}')
+                self.logger.debug('%-55s  %8d  %8s  %8d', t.payee, t.credit, '', total_credit)
                 total_credit += t.credit
             elif t.debit is not None:
-                print(f'{t.payee:55s}  {" ":8s}  {t.debit:8d}  {total_debit:8d}')
+                self.logger.debug('%-55s  %8s  %8d  %8d', t.payee, '', t.debit, total_debit)
                 total_debit += t.debit
             else:
                 assert False, f'Transaction has no credit or debit {t}'
@@ -386,10 +387,10 @@ class BMOMastercardPDFProcessor(PDFProcessor):
         for t in transactions:
             if t.credit is not None:
                 total_amount += t.credit
-                print(f'{t.payee:60s}  {t.credit:8d}  {" ":8s}  {total_amount:8d}')
+                self.logger.debug('%-60s  %8d  %8s  %8d', t.payee, t.credit, '', total_amount)
             elif t.debit is not None:
                 total_amount -= t.debit
-                print(f'{t.payee:60s}  {" ":8s}  {t.debit:8d}  {total_amount:8d}')
+                self.logger.debug('%-60s  %8s  %8d  %8d', t.payee, '', t.debit, total_amount)
             else:
                 assert False, f'Transaction has no credit or debit {t}'
 
@@ -618,10 +619,10 @@ class RBCChequingPDFProcessor(PDFProcessor):
         for t in transactions:
             if t.credit is not None:
                 total_amount -= t.credit
-                print(f'{t.payee:60s}  {t.credit:8d}  {" ":8s}  {total_amount:8d}')
+                self.logger.debug('%-60s  %8d  %8s  %8d', t.payee, t.credit, '', total_amount)
             elif t.debit is not None:
                 total_amount += t.debit
-                print(f'{t.payee:60s}  {" ":8s}  {t.debit:8d}  {total_amount:8d}')
+                self.logger.debug('%-60s  %8s  %8d  %8d', t.payee, '', t.debit, total_amount)
             else:
                 assert False, f'Transaction has no credit or debit {t}'
 
@@ -739,10 +740,10 @@ class RBCMastercardPDFProcessor(PDFProcessor):
         for tx in transactions:
             if tx.credit is not None:
                 new_balance += tx.credit
-                print(f'{tx.payee:60s}  {tx.credit:8d}  {" ":8s}  {new_balance:8d}')
+                self.logger.debug('%-60s  %8d  %8s  %8d', tx.payee, tx.credit, '', new_balance)
             elif tx.debit is not None:
                 new_balance -= tx.debit
-                print(f'{tx.payee:60s}  {" ":8s}  {tx.debit:8d}  {new_balance:8d}')
+                self.logger.debug('%-60s  %8s  %8d  %8d', tx.payee, '', tx.debit, new_balance)
 
         assert new_balance == self.closing_balance, 'Balance mismatch'
         return transactions

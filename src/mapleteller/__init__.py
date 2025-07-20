@@ -20,21 +20,3 @@ def main():
     else:
         module_logger.setLevel(logging.INFO)
     PDFProcessor.process(args.file, module_logger)
-
-    #    case 'bmo_chequing':
-    #        BMOChequingPDFProcessor(module_logger).process(args.file)
-    #    case 'rbc_chequing':
-    #        pass
-    #        #RBCChequingPDFProcessor(module_logger).process(sys.argv[2])
-    #    case 'bmo_mastercard':
-    #        BMOMastercardPDFProcessor(module_logger).process(args.file)
-    #    case 'rbc_mastercard':
-    #        pass
-    #        #RBCCardPDFProcessor(module_logger).process(sys.argv[2])
-    #    case 'rbc_invest':
-    #        pass
-    #        #RBCInvestPDFProcessor(module_logger).process(sys.argv[2])
-    #    case '_':
-    #        print(f'Error: "{type}" is not a valid type')
-    #        print('Valid types: bmo_chequing, rbc_chequing, bmo_mastercard, rbc_mastercard, rbc_invest')
-    #        sys.exit(1)
