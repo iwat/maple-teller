@@ -75,13 +75,15 @@ class PDFProcessor(ABC):
                 first_page = pdf.pages[0].extract_text(layout=True, x_tolerance=1)
 
                 if processor is None:
-                    print(first_page, file=sys.stderr)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        print(first_page, file=sys.stderr)
                     raise ValueError("No idea what this is")
 
                 try:
                     processor.process_first_page(first_page)
                 except Exception:
-                    print(first_page, file=sys.stderr)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        print(first_page, file=sys.stderr)
                     raise
 
                 transactions = []
