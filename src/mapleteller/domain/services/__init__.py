@@ -6,8 +6,8 @@ from .pdfprocessor import (
 )
 
 __all__ = [
-    'PDFProcessor',
-    'BMOChequingPDFProcessor',
-    'BMOMastercardPDFProcessor',
-    'RBCChequingPDFProcessor',
+    "PDFProcessor",
+    "BMOChequingPDFProcessor",
+    "BMOMastercardPDFProcessor",
+    "RBCChequingPDFProcessor",
 ]

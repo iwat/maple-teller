@@ -42,6 +42,9 @@ class PDFProcessor(ABC):
     def process(file: str, logger: logging.Logger) -> list[Transaction]:
         if file == "-":
             pdf_data = sys.stdin.buffer.read()
+        if isinstance(file, bytes):
+            pdf_data = file
+            file = "-"
 
         def file_or_stream():
             return io.BytesIO(pdf_data) if file == "-" else file  # pyright: ignore[reportPossiblyUnboundVariable]

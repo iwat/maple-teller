@@ -1,12 +1,13 @@
 import argparse
 import logging
 
-from tabulate import tabulate
 
 from mapleteller.domain.services import PDFProcessor
 
 
 def main():
+    from tabulate import tabulate
+
     logging.basicConfig(level=logging.INFO)
     module_logger = logging.getLogger("mapleteller")
 
