@@ -8,11 +8,11 @@ from mapleteller.domain.services import PDFProcessor
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    module_logger = logging.getLogger('mapleteller')
+    module_logger = logging.getLogger("mapleteller")
 
-    parser = argparse.ArgumentParser(description='Process bank statements')
-    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
-    parser.add_argument('file', nargs='?', help='Path to the statement file')
+    parser = argparse.ArgumentParser(description="Process bank statements")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--file", help="Path to the statement file", required=True)
 
     args = parser.parse_args()
 
